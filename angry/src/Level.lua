@@ -7,11 +7,12 @@
 ]]
 
 Level = Class{}
+-- flag the collison of player with anything in the world
+local playerCollided = false
 
 function Level:init()
-    
     -- create a new "world" (where physics take place), with no x gravity
-    -- and 30 units of Y gravity (for downward force)
+    -- and 300 units of Y gravity (for downward force)
     self.world = love.physics.newWorld(0, 300)
 
     -- bodies we will destroy after the world update cycle; destroying these in the
@@ -24,9 +25,10 @@ function Level:init()
         local types = {}
         types[a:getUserData()] = true
         types[b:getUserData()] = true
-
+        
         -- if we collided between both the player and an obstacle...
         if types['Obstacle'] and types['Player'] then
+            playerCollided = true
 
             -- grab the body that belongs to the player
             local playerFixture = a:getUserData() == 'Player' and a or b
@@ -43,7 +45,6 @@ function Level:init()
 
         -- if we collided between an obstacle and an alien, as by debris falling...
         if types['Obstacle'] and types['Alien'] then
-
             -- grab the body that belongs to the player
             local obstacleFixture = a:getUserData() == 'Obstacle' and a or b
             local alienFixture = a:getUserData() == 'Alien' and a or b
@@ -59,6 +60,7 @@ function Level:init()
 
         -- if we collided between the player and the alien...
         if types['Player'] and types['Alien'] then
+            playerCollided = true
 
             -- grab the bodies that belong to the player and alien
             local playerFixture = a:getUserData() == 'Player' and a or b
@@ -75,6 +77,8 @@ function Level:init()
 
         -- if we hit the ground, play a bounce sound
         if types['Player'] and types['Ground'] then
+            playerCollided = true
+
             gSounds['bounce']:stop()
             gSounds['bounce']:play()
         end
@@ -175,13 +179,64 @@ function Level:update(dt)
         local xPos, yPos = self.launchMarker.alien.body:getPosition()
         local xVel, yVel = self.launchMarker.alien.body:getLinearVelocity()
         
+        -- if we press space then the alien should spawn two clones
+        if not playerCollided then
+            if love.keyboard.wasPressed('space') then
+                -- code for multiple alien spawn
+                -- spawn new alien in the world, passing in user data of player
+                for i = 1, 2 do
+                    local alien = Alien(self.world, 'round', xPos, yPos, 'Player')
+                    -- apply the difference between current X,Y and base X,Y as launch vector impulse
+                    alien.body:setLinearVelocity(xVel, yVel + (i % 2 and i * 4 or i * -4))
+                    
+                    -- make the alien pretty bouncy
+                    alien.fixture:setRestitution(0.4)
+                    alien.body:setAngularDamping(1)
+                    table.insert(self.aliens, alien)
+                end
+            end
+        end
+
+        -- if player is almost idle then reset
+        local playerIdle = true
+        if self.aliens then
+            for k, alien in pairs(self.aliens) do
+                if alien.fixture:getUserData() == 'Player' then
+                    playerIdle = false
+                    local xVel, yVel = alien.body:getLinearVelocity()
+
+                    local sumVel = math.abs(xVel) + math.abs(yVel)
+
+                    if sumVel < 1.5 then
+                        playerIdle = true
+                    else
+                        playerIdle = false
+                    end
+                end
+            end
+        end
+
         -- if we fired our alien to the left or it's almost done rolling, respawn
-        if xPos < 0 or (math.abs(xVel) + math.abs(yVel) < 1.5) then
+        if xPos < 0 or ((math.abs(xVel) + math.abs(yVel) < 1.5) and playerIdle) then
             self.launchMarker.alien.body:destroy()
+            -- destroy the new alien spawned
+            for k, alien in pairs(self.aliens) do
+                if alien.fixture:getUserData() == 'Player' then
+                    table.insert(self.destroyedBodies, alien.body)
+                end
+            end
             self.launchMarker = AlienLaunchMarker(self.world)
 
+            playerCollided = false
+            
             -- re-initialize level if we have no more aliens
-            if #self.aliens == 0 then
+            local noAliens = true
+            for k, alien in pairs(self.aliens) do
+                if alien.fixture:getUserData() == 'Alien' then
+                    noAliens = false
+                end
+            end
+            if noAliens then
                 gStateMachine:change('start')
             end
         end
@@ -193,6 +248,10 @@ function Level:render()
     -- render ground tiles across full scrollable width of the screen
     for x = -VIRTUAL_WIDTH, VIRTUAL_WIDTH * 2, 35 do
         love.graphics.draw(gTextures['tiles'], gFrames['tiles'][12], x, VIRTUAL_HEIGHT - 35)
+    end
+
+    if self.alien then
+        self.alien:render()
     end
 
     self.launchMarker:render()
